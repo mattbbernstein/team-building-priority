@@ -19,11 +19,90 @@ TABLES = {
     "DH" : "value_dh",
 }
 
+# TODO: Consider moving from sklearn to statsmodels
 
 def main(db: sql.Connection):
-    (m1, m2) = linear_regression_fielders(db, TABLES["C"], "C")
+    models = {}
+    for position, table in TABLES.items():
+        models[position] = linear_regression_fielders(db, table, position)
+    models["Pitching"] = linear_regression_pitching(db)
 
-def linear_regression_fielders(db: sql.Connection, table: str, position: str):
+    plot_model(models["Pitching"]["Starting"], models["Pitching"]["W"], "Pitching")
+
+def linear_regression_pitching(db:sql.Connection) -> LinearRegression:
+    """ Runs a simple linear regression for Pitchers
+
+        Runs a linear regresssion for Pitching RC vs
+        team wins. Saves a scatter plot with both sets of data and
+        regression lines. Returns the two models.
+        This checks starting pitching, relief pitching, and
+        then total pitching
+
+        Arguments:
+            db (sqlite.Connection): Database connection
+
+        Returns:
+            Model dictionary: Pitching models
+    """
+
+    df = pd.read_sql_query("""
+    SELECT 
+        tr.Season, 
+        tr.Team, 
+        tr.W, 
+        p.Starting, 
+        p.Relieving,
+        p.RAR
+    FROM
+        team_record AS tr,
+        pitching AS p
+    WHERE
+        tr.Season = p.Season
+        AND
+        tr.Team = p.Team
+    ORDER BY
+        tr.Season DESC
+    """,
+    db)
+    wins = df["W"].values
+    r_start = df["Starting"].values.reshape(-1,1)
+    r_relief = df["Relieving"].values.reshape(-1,1)
+    r_tot = df["RAR"].values.reshape(-1,1)
+
+    start_model = LinearRegression().fit(r_start, wins)
+    sr_sq = start_model.score(r_start,wins)
+    sintercept = start_model.intercept_
+    sslope = start_model.coef_[0]
+
+    print("Analysis: Pitching")
+
+    print("Starting: r^2 = {:0.3} -- Wins = {:0.3} * Starting + {:0.3}".format(sr_sq, sslope, sintercept))
+
+    relief_model = LinearRegression().fit(r_relief, wins)
+    rr_sq = relief_model.score(r_relief,wins)
+    rintercept = relief_model.intercept_
+    rslope = relief_model.coef_[0]
+
+    print("Relief:   r^2 = {:0.3} -- Wins = {:0.3} * Relief + {:0.3}".format(rr_sq, rslope, rintercept))
+
+    tot_model = LinearRegression().fit(r_tot, wins)
+    tr_sq = tot_model.score(r_tot,wins)
+    tintercept = tot_model.intercept_
+    tslope = tot_model.coef_[0]
+
+    print("Total:    r^2 = {:0.3} -- Wins = {:0.3} * RAR + {:0.3}".format(tr_sq, tslope, tintercept))
+
+    print("--------------------------------------------------\n")
+
+    ret_dict = {
+        "Starting": {"model": start_model, "data": r_start},
+        "Relief":   {"model": relief_model, "data": r_relief},
+        "Total":    {"model": tot_model, "data": r_tot},
+        "W": wins
+    }
+    return ret_dict
+
+def linear_regression_fielders(db: sql.Connection, table: str, position: str) -> (LinearRegression, LinearRegression):
     """ Runs a simple linear regression for Non-pitchers
 
         Runs a linear regresssion for Offensive and Defensive RC vs
@@ -35,16 +114,17 @@ def linear_regression_fielders(db: sql.Connection, table: str, position: str):
             table (str): Name of table to run regression on
 
         Returns:
-            (model_off, model_def): Offensive and defensive models
+            (model_off, model_def, model_total): Offensive, defensive, and overall models
     """
-    table="value_1b"
+
     df = pd.read_sql_query("""
     SELECT 
         tr.Season, 
         tr.Team, 
         tr.W, 
         v.Off, 
-        v.Def
+        v.Def,
+        v.RAR
     FROM
         team_record AS tr,
         {} AS v
@@ -59,48 +139,66 @@ def linear_regression_fielders(db: sql.Connection, table: str, position: str):
     wins = df["W"].values
     r_off = df["Off"].values.reshape(-1,1)
     r_def = df["Def"].values.reshape(-1,1)
+    r_tot = df["RAR"].values.reshape(-1,1)
     
     off_model = LinearRegression().fit(r_off, wins)
     or_sq = off_model.score(r_off,wins)
     ointercept = off_model.intercept_
     oslope = off_model.coef_[0]
 
-    print("Offense:\nr^2 = {:0.3}\nWins = {:0.3} * Off + {:0.3}\n".format(or_sq, oslope, ointercept))
-    owins_pred = off_model.predict(r_off)
+    print("Analysis: {}".format(position))
+
+    print("Offense: r^2 = {:0.3} -- Wins = {:0.3} * Off + {:0.3}".format(or_sq, oslope, ointercept))
 
     def_model = LinearRegression().fit(r_def, wins)
     dr_sq = def_model.score(r_def,wins)
     dintercept = def_model.intercept_
     dslope = def_model.coef_[0]
 
-    print("Defense\nr^2 = {:0.3}\nWins = {:0.3} * Off + {:0.3}\n".format(dr_sq, dslope, dintercept))
-    dwins_pred = def_model.predict(r_def)
+    print("Defense: r^2 = {:0.3} -- Wins = {:0.3} * Off + {:0.3}".format(dr_sq, dslope, dintercept))
 
-    # Plotting the data
-    plt.rcParams["figure.figsize"] = (10,8)
-    fig, axs = plt.subplots(2)
-    plt.subplots_adjust(hspace=0.4)
+    tot_model = LinearRegression().fit(r_tot, wins)
+    tr_sq = tot_model.score(r_tot,wins)
+    tintercept = tot_model.intercept_
+    tslope = tot_model.coef_[0]
 
-    axs[0].scatter(r_off,wins, color='blue', label="Raw Data")
-    axs[0].plot(r_off,owins_pred, color='red', label="Fit Line\nW = {:0.3}*Off + {:0.3}".format(oslope, ointercept))
-    axs[0].set_title("Offensive Runs")
-    axs[0].legend(loc="lower right")
+    print("Total:   r^2 = {:0.3} -- Wins = {:0.3} * RAR + {:0.3}".format(tr_sq, tslope, tintercept))
 
-    axs[1].scatter(r_def,wins, color='blue', label="Raw Data")
-    axs[1].plot(r_def,dwins_pred, color='red', label="Fit Line\nW = {:0.3}*Off + {:0.3}".format(dslope, dintercept))
-    axs[1].set_title("Defensive Runs")
-    axs[1].legend(loc="lower right")
+    print("--------------------------------------------------\n")
 
-    # Formatting the axis
-    for ax in axs.flat:
-        ax.set(xlabel='Runs', ylabel='Team Wins')
-        ax.label_outer()
-    plt.suptitle("{}: Runs Created vs Team Wins".format(position))
-    # plt.legend(labels=["Offensive Runs", "Defensive Runs","Offensive Prediction", "Defensive Prediction"])
+    ret_dict = {
+        "Offense":  {"model": off_model, "data": r_off},
+        "Defense":  {"model": def_model, "data": r_def},
+        "Total":    {"model": tot_model, "data": r_tot},
+        "W": wins
+    }
+    return ret_dict
 
-    plt.savefig("{}_plot.png".format(position))
+def plot_model(model_data: dict, win_data: np.ndarray, title: str, axs: plt.Axes = None, save: bool = True) -> plt.Axes:
 
-    return (off_model, def_model)
+    # If an axes object was passed in don't save the figure
+    # Otherwise, create an appropriate object
+    if axs:
+        save = False
+    else:
+        _, axs = plt.subplots(1)
+
+    model = model_data["model"]
+    raw = model_data["data"]
+    prediction = model.predict(raw)
+    
+    axs.scatter(raw,win_data, color='blue', label="Raw Data")
+    axs.plot(raw,prediction, color='red', 
+            label = r"Wins = {:0.3} * Runs + {:0.3}".format(model.coef_[0], model.intercept_) + "\n" + 
+                    r"r$^2$ = {:0.3}".format(model.score(raw, win_data)))
+    
+    axs.set_title("Runs")
+    axs.legend(loc="lower right")
+    axs.set(xlabel='Runs', ylabel='Team Wins')
+
+    if save: plt.savefig("Images/{}_plot.png".format(title))
+
+    return axs
 
 if __name__ == "__main__":
     
