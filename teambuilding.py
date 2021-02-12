@@ -28,8 +28,80 @@ def main(db: sql.Connection):
         models[position] = linear_regression_fielders(db, table, position)
     models["Pitching"] = linear_regression_pitching(db)
 
-    for position in models:
-        plot_model(models[position], position)
+    plot = False
+    if plot:
+        for position in models:
+            plot_model(models[position], position)
+
+
+    df = pd.read_sql_query("""
+    SELECT 
+        tr.Season, 
+        tr.Team, 
+        tr.W, 
+        p.RAR AS p_rar,
+        c.RAR AS c_rar,
+        first.RAR AS first_rar,
+        second.RAR AS second_rar,
+        third.RAR AS third_rar,
+        ss.RAR AS ss_rar,
+        lf.RAR AS lf_rar,
+        cf.RAR AS cf_rar,
+        rf.RAR AS rf_rar,
+        dh.RAR AS dh_rar
+    FROM
+        team_record AS tr
+        INNER JOIN pitching AS p 
+            ON 
+                tr.Season = p.Season AND
+                tr.Team = p.Team
+        INNER JOIN value_c AS c 
+            ON 
+                tr.Season = c.Season AND
+                tr.Team = c.Team
+        INNER JOIN value_1b AS first 
+            ON 
+                tr.Season = first.Season AND
+                tr.Team = first.Team
+        INNER JOIN value_2b AS second 
+            ON 
+                tr.Season = second.Season AND
+                tr.Team = second.Team
+        INNER JOIN value_3b AS third 
+            ON 
+                tr.Season = third.Season AND
+                tr.Team = third.Team
+        INNER JOIN value_ss AS ss 
+            ON 
+                tr.Season = ss.Season AND
+                tr.Team = ss.Team
+        INNER JOIN value_lf AS lf 
+            ON 
+                tr.Season = lf.Season AND
+                tr.Team = lf.Team
+        INNER JOIN value_cf AS cf 
+            ON 
+                tr.Season = cf.Season AND
+                tr.Team = cf.Team
+        INNER JOIN value_rf AS rf 
+            ON 
+                tr.Season = rf.Season AND
+                tr.Team = rf.Team
+        INNER JOIN value_dh AS dh 
+            ON 
+                tr.Season = dh.Season AND
+                tr.Team = dh.Team
+    ORDER BY
+        tr.Season DESC
+    """, db)
+    print(df)
+    X = df[['p_rar','c_rar','first_rar','second_rar','third_rar','ss_rar','lf_rar','cf_rar','rf_rar','dh_rar']]
+    X = sm.add_constant(X)
+    Y = df['W']
+
+    model = sm.OLS(Y, X).fit()
+    print(model.summary())
+
 
 def linear_regression_pitching(db:sql.Connection) -> LinearRegression:
     """ Runs a simple linear regression for Pitchers
